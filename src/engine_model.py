@@ -1,75 +1,154 @@
-# engine_model.py
-# Baseline 0-D Turbofan Model
-# Maxon Ericsson
+"""
+engine_model.py
+0-D Baseline Turbofan Engine Model (Integrated Component Flow)
+Author: Maxon Ericsson
+Project: Ultra-Lightweight Adaptive Cycle Engine — Phase 2
+"""
 
-from components.compressor import compressor
-from components.combustor import combustor
+# ============================================================
+# IMPORTS
+# ============================================================
+
+from components.compressor import compressor, compute_compressor_work
+from components.combustor import combustor, compute_heat_release
 from components.turbine import turbine
-from components.nozzle import nozzle
+from components.nozzle import nozzle, compute_thrust_simple, compute_specific_impulse
 
-import math
+from typing import Dict
 
-def main():
-    print("Running baseline 0-D turbofan engine model...\n")
 
-    # ---------------------------------------------------
-    # 1. SET ENGINE INPUT PARAMETERS
-    # ---------------------------------------------------
+# ============================================================
+# CONSTANTS
+# ============================================================
 
-    T_ambient = 288.15     # K   (15°C)
-    P_ambient = 101325     # Pa  (sea level)
+g0 = 9.81       # gravitational acceleration [m/s²]
 
-    mass_flow = 50         # kg/s (core mass flow)
-    pressure_ratio = 18    # overall compressor ratio
-    eta_comp = 0.88        # compressor efficiency
-    eta_turb = 0.90        # turbine efficiency
 
-    fuel_air_ratio = 0.02  # baseline F/A ratio
-    TIT = 1500             # turbine inlet temp target (K)
+# ============================================================
+# ENGINE MODEL CLASS
+# ============================================================
 
-    # ---------------------------------------------------
-    # 2. COMPRESSOR
-    # ---------------------------------------------------
+class EngineModel:
+    """
+    Simple 0-D engine model wrapper.
 
-    T2, P2 = compressor(T_ambient, P_ambient, pressure_ratio, eta_comp)
-    print(f"Compressor exit: T2={T2:.2f} K, P2={P2/1000:.2f} kPa")
+    Handles:
+        • Sequential thermodynamic processing
+        • Compressor → Combustor → Turbine → Nozzle
+        • Turbine work balance to power compressor
+        • Fuel–air ratio calculations
+        • Thrust + Isp
+    """
 
-    # ---------------------------------------------------
-    # 3. COMBUSTOR
-    # ---------------------------------------------------
+    def __init__(
+        self,
+        mass_flow: float = 50.0,         # kg/s core air flow
+        compressor_PR: float = 18.0,     # total pressure ratio
+        compressor_eff: float = 0.88,    # compressor efficiency
+        turbine_eff: float = 0.90,       # turbine efficiency
+        f: float = 0.020                 # baseline fuel–air ratio
+    ) -> None:
 
-    T3, P3 = combustor(T2, P2, fuel_air_ratio)
-    print(f"Combustor exit: T3={T3:.2f} K, P3={P3/1000:.2f} kPa")
+        self.mass_flow = mass_flow
+        self.compressor_PR = compressor_PR
+        self.compressor_eff = compressor_eff
+        self.turbine_eff = turbine_eff
+        self.f = f
 
-    # ---------------------------------------------------
-    # 4. TURBINE WORK REQUIREMENT
-    # ---------------------------------------------------
+    # ============================================================
+    # MAIN ENGINE RUN METHOD
+    # ============================================================
 
-    cp = 1005
-    compressor_work = cp * (T2 - T_ambient)
-    print(f"Compressor work required: {compressor_work:.2f} J/kg")
+    def run(self, T_ambient: float, P_ambient: float) -> Dict[str, float]:
+        """
+        Run the 0-D engine and compute:
+            • Station thermodynamic states
+            • Thrust
+            • Isp
+            • Fuel flow
 
-    # ---------------------------------------------------
-    # 5. TURBINE
-    # ---------------------------------------------------
+        Returns:
+            dict[str, float] of results
+        """
 
-    T4, P4 = turbine(T3, P3, compressor_work, eta_turb)
-    print(f"Turbine exit: T4={T4:.2f} K, P4={P4/1000:.2f} kPa")
+        results: Dict[str, float] = {}
 
-    # ---------------------------------------------------
-    # 6. NOZZLE + EXHAUST VELOCITY
-    # ---------------------------------------------------
+        # --------------------------------------------------------
+        # 1. COMPRESSOR
+        # --------------------------------------------------------
+        T2, P2 = compressor(
+            T_in=T_ambient,
+            P_in=P_ambient,
+            pressure_ratio=self.compressor_PR,
+            efficiency=self.compressor_eff
+        )
 
-    V_exit, M_exit = nozzle(T4, P4, P_ambient)
-    print(f"Nozzle exit velocity: {V_exit:.2f} m/s (Mach {M_exit:.2f})")
+        Wc = compute_compressor_work(
+            T_in=T_ambient,
+            T_out=T2,
+            mass_flow=1.0
+        )
 
-    # ---------------------------------------------------
-    # 7. THRUST
-    # ---------------------------------------------------
+        # --------------------------------------------------------
+        # 2. COMBUSTOR
+        # --------------------------------------------------------
+        T3, P3 = combustor(
+            T_in=T2,
+            P_in=P2,
+            fuel_air_ratio=self.f
+        )
 
-    thrust = mass_flow * V_exit
-    print(f"\nNET THRUST: {thrust:.2f} N")
+        # --------------------------------------------------------
+        # 3. TURBINE (provides compressor shaft work)
+        # --------------------------------------------------------
+        T4, P4 = turbine(
+            T_in=T3,
+            P_in=P3,
+            work_required=Wc,
+            efficiency=self.turbine_eff
+        )
 
+        # --------------------------------------------------------
+        # 4. NOZZLE → THRUST
+        # --------------------------------------------------------
+        T5, P5, V5, M5 = nozzle(
+            T_in=T4,
+            P_in=P4,
+            P_ambient=P_ambient
+        )
+
+        thrust = compute_thrust_simple(self.mass_flow, V5)
+        mdot_fuel = self.mass_flow * self.f
+        Isp = compute_specific_impulse(thrust, mdot_fuel)
+
+        # --------------------------------------------------------
+        # STORE RESULTS
+        # --------------------------------------------------------
+        results.update({
+            "T2": T2, "P2": P2,
+            "T3": T3, "P3": P3,
+            "T4": T4, "P4": P4,
+            "T5": T5, "P5": P5,
+
+            "V_exit": V5,
+            "M_exit": M5,
+
+            "thrust_N": thrust,
+            "specific_impulse_s": Isp,
+            "fuel_flow_kg_s": mdot_fuel
+        })
+
+        return results
+
+
+# ============================================================
+# STANDALONE TEST
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    engine = EngineModel()
+    out = engine.run(288.15, 101325.0)
+
+    print("\n=== BASELINE ENGINE OUTPUT ===")
+    for k, v in out.items():
+        print(f"{k:20s} : {v}")
