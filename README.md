@@ -16,8 +16,3 @@ Phase 2 focuses specifically on:
 -  Sensitivity analyses (ambient temperature, compressor pressure ratio)  
 -  Automated high-resolution performance plots  
 -  JupyterLab-based validation notebook
-
----
-
-## Repository Structure
-
